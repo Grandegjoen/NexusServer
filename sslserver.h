@@ -8,6 +8,9 @@
 #include <QSslSocket>
 #include <QSslConfiguration>
 #include <QFile>
+#include <QDataStream>
+#include <QDir>
+
 class SslServer : public QTcpServer
 {
 public:
@@ -24,7 +27,14 @@ public slots:
 private:
     QSslKey key;
     QSslCertificate cert;
+
     void incomingConnection(qintptr socket_descriptor);
+    void send_file_info();
+    void send_notes_info();
+    void send_file();
+    void receive_file();
+    void set_keys();
+
     QTcpSocket* client_socket;
 
     QString cert_location;

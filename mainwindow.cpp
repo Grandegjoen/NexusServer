@@ -3,19 +3,12 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
-    , ui(new Ui::MainWindow)
-{
+    , ui(new Ui::MainWindow){
     ui->setupUi(this);
-
-//    SslServer *server = new SslServer(this);
-
-    SslServer *server;
     server = new SslServer(this);
+    }
 
-
-}
-
-MainWindow::~MainWindow()
-{
+MainWindow::~MainWindow(){
     delete ui;
 }
+

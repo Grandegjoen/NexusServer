@@ -1,24 +1,18 @@
 #include "sslserver.h"
 
+// Initialization of server
 SslServer::SslServer(QObject *parent)
     : QTcpServer{parent}{
-    qDebug() << "Starting server...";
-
-    // Loads keys from files into server.
     set_keys();
-    // Starts listening for connections
-    if (!listen(QHostAddress::Any, 12345)) {
-        qCritical() << "Unable to start the TCP server";
-        exit(0);
-    } else {
-        qDebug() << "Listening!";
-    }
+    start_server();
+    sql_server = new SqlServer();
+    // Read port number and such from server config file ...
 
-    // Calls link whenever a new connection is established.
-    // newConnection is emitted once incomingConnection (overwritten below) is changed.
-    connect(this, &SslServer::newConnection, this, &SslServer::link);
+    log.setFileName("data/message_log.nex");
+    log.open(QIODevice::Append | QIODevice::WriteOnly);
 
 }
+
 
 void SslServer::set_keys(){
     cert_location = "/home/admin/keys/grandegjoen_server_keys/red_local.pem";
@@ -34,52 +28,32 @@ void SslServer::set_keys(){
     cert = QSslCertificate(cert_file.readAll());
     cert_file.close();
 }
+// Initialization of server
 
-void SslServer::link(){
-    // nextPendingConnection returns ssl_socket from incomingConnection. Secure connection!
-    //    QTcpSocket *client_socket;
-    qDebug() << "IncomingLink!";
-
-    client_socket = nextPendingConnection();
-    qDebug() << "Link has been established. Sending file info soon!";
-    // ReadyRead is data from server. Can write to server using client_socket->write.
-    connect(client_socket, &QTcpSocket::readyRead, this, &SslServer::read_data);
-    connect(client_socket, &QTcpSocket::disconnected, this, &SslServer::disconnected);
-    send_file();
+// ---------------------------- HANDLES START OF SERVER AND ALL CONNECTIONS TO IT ----------------------------
+void SslServer::start_server(){
+    if (!listen(QHostAddress::Any, server_port)){
+        qCritical() << "Unable to start the server";
+    } else {
+        qDebug() << "Listening on " << server_port;
+        ftp_server = new FTPServer();
+        ftp_server->start_server();
+        ftp_server->sql_server = sql_server;
+    }
+    connect(this, &SslServer::newConnection, this, &SslServer::link);
+    qDebug() << "Connected";
 }
 
-void SslServer::read_data(){
-    // client_socket pointer is assigned to client_socket_data to avoid the right client socket being overwritten? Need to test.
-    QTcpSocket *client_socket_data = qobject_cast<QTcpSocket*>(sender());
-
-    // Need to assign protocols for different functions.
-    // Read/Assign first 400 bytes for metadata
-
-    QString command = client_socket_data->readAll();
-
-    // Do different things depending on command. For now I just temporarily send some files...
-
-
-
-}
-
-void SslServer::disconnected(){
-    qDebug("Client Disconnected");
-    QTcpSocket* client_socket = qobject_cast<QTcpSocket*>(sender());
-    client_socket->deleteLater();
-}
 
 void SslServer::incomingConnection(qintptr socket_descriptor){
-    qDebug() << "IncomingConnection!";
+    qDebug() << "Incoming connection!";
     QSslSocket *ssl_socket = new QSslSocket(this);
 
+    qDebug() << ssl_socket->socketDescriptor();
     // Adds ca certificates to socket
     QSslConfiguration ssl_config = QSslConfiguration::defaultConfiguration();
     ssl_config.addCaCertificates(CaCerts_location);
     ssl_socket->setSslConfiguration(ssl_config);
-
-    // Sends errors to ssl_errors slot
-    connect(ssl_socket, SIGNAL(sslErrors(QList<QSslError>)), this, SLOT(ssl_errors(QList<QSslError>)));
 
     // Socket descriptor is the client identifier.
     ssl_socket->setSocketDescriptor(socket_descriptor);
@@ -89,182 +63,321 @@ void SslServer::incomingConnection(qintptr socket_descriptor){
     ssl_socket->startServerEncryption();
 
     // Goes to link using a ssl_socket
+
     addPendingConnection(ssl_socket);
 }
 
-void SslServer::send_file_info(){
-    // Sql Query to receive file info
 
-    QByteArray header;
-//    header.fill(0, 500);
-    QString path = QDir::currentPath() + "/test.txt";
-    QFile file_to_send(path);
-    file_to_send.open(QIODevice::ReadOnly);
-    QFileInfo fi(path);
-    QByteArray data_type = "File";
-    QByteArray file_name = fi.baseName().toUtf8();
-    QByteArray data_size;
-    data_size = data_size.setNum(file_to_send.size() + 500, 10);
-    header = data_type + "|" + file_name + "|" + data_size + "|";
-    qDebug() << header.size();
-    qDebug() << data_type.size();
-    qDebug() << file_name.size();
-    qDebug() << data_size;
-    qDebug() << data_size.size();
-    while (header.size() < 500){
-        header.append(0x1);
+void SslServer::link(){
+
+    qDebug() << "Link!";
+
+    Client *client = new Client(this);
+    client->ssl_socket = nextPendingConnection();
+    qDebug() << "Writing after next_pending...";
+
+    clients.append(client);
+    connect(client->ssl_socket, &QTcpSocket::readyRead, this, &SslServer::read_data);
+    connect(client->ssl_socket, &QTcpSocket::disconnected, this, &SslServer::disconnected);
+}
+// ---------------------------- HANDLES START OF SERVER AND ALL CONNECTIONS TO IT ----------------------------
+
+
+// ---------------------------- HANDLES INCOMING DATA AND DISCONNECTION --------------------------------------
+void SslServer::read_data(){
+    // Back to the basics: Experimenting!
+    QTcpSocket *client_socket = qobject_cast<QTcpSocket*>(sender());
+    if (client_socket->bytesAvailable() < 5){} /////////////////////////////////////////////////////////////////////////////////////////
+    Client *client = return_client(client_socket);
+    if (client == nullptr){
+        qDebug() << "Nullptr client? Exiting...";
+        exit(19282);
     }
-
-    header.append(file_to_send.readAll());
-    qDebug() << header.size();
-    qDebug() << header;
-
-
-    return;
-//    qDebug() << "Test";
-//    QString path = QDir::currentPath() + "/test.txt";
-//    QFile file_to_send(path);
-//    QFileInfo fi(path);
-//    QByteArray file_name = fi.baseName().toUtf8(); // Stores filename in QByteArray
-//    QByteArray file_name_size;
-//    file_name_size = file_name_size.setNum(file_name.size(), 2); // Converts size to binary
-//    client_socket->write("File|");
-//    client_socket->write(file_name_size);
-//    client_socket->write("|");
-//    client_socket->write(file_name);
-//    client_socket->write("|");
-//    file_to_send.open(QIODevice::ReadOnly);
-//    QByteArray file = file_to_send.readAll();
-//    QByteArray file_size;
-//    file_size = file_size.setNum(file.size(), 2); // Converts size to binary
-//    client_socket->write(file_size);
-//    client_socket->write("|");
-//    client_socket->write("Test1");
-//    client_socket->write("Test2");
-
-//    client_socket->write(file); // Create loop to send in multiple packages?
-//    client_socket->write(file_size);
-//    while(!file.atEnd()){
-//        QByteArray block;
-//        QDataStream out(&block, QIODevice::WriteOnly);
-//        out << file_to_send.fileName();
-
-//        block.append(file_to_send.read(2048));
-//        client_socket->write(block);
-//    }
-    qDebug() << "REACHED END!";
-
-    return;
-
-    //    QString path = QDir::currentPath() + "/Neon City.png";
-    //    QFile image(path);
-    //    image.open(QIODevice::ReadOnly);
-
-    //    QByteArray block;
-    //    QDataStream out(&block, QIODevice::WriteOnly);
-
-    //    out << (quint32)0 << image.fileName();
-
-    //    QByteArray q = image.readAll();
-    //    block.append(q);
-    //    image.close();
-
-    //    out.device()->seek(0);
-    //    out << (quint32)(block.size() - sizeof(quint32));
-
-    //    qint64 x = 0;
-    //    while (x < block.size()) {
-    //        qint64 y = client_socket->write(block);
-    //        x += y;
-    //        qDebug() << x;
-    //    }
-
-    //    qDebug() << "Sending...";
-    //    QString path = QDir::currentPath() + "/Neon City.png";
-    //    QString path2 = QDir::currentPath() + "/testtest.png";
-    //    client_socket->write("GIDANGIADFUJGI9UDFSJGIODSFJNVBFSDUIJJGVBNPXI HJQ3T4UNIPDF");
-    //    QFile image(path);
-    //    image.open(QIODevice::ReadOnly);
-    //    QFile file(path2);
-    //    file.open(QIODevice::ReadWrite);
-    //    QDataStream out(&file);
-
-    //    out << QString("Neon City.png");
-    //    out << (qint32)49213;
-    //    out << image.readAll();
-    //    client_socket->write(file.readAll());
-
-    //    out.device()->seek(0);
-    //    out << (quint64)(QBA.size() - sizeof(quint64));
-    //    QString data_type = "File_info";
-    //    QString file_one = "Account.txt\n43.2mb\n05.05.2022\nContains DB username and PW\n";
-    //    QString file_two = "Rarry.txt\n52.9mb\n03.04.2021\nSome notes about the origins of the universe.\n";
-    //    QDataStream stream(&file);
-    //    stream << data_type;
-    //    stream << file_one;
-    //    stream << file_two;
-    //    for (int i = 0; i < 3; ++i){
-    //        QString test;
-    //        out >> test;
-    //        qDebug() << test;
-    //    }
-
-
+    // Here begins the experiment
+    if (client->active_data_transmission){
+        client->data.append(client->ssl_socket->read(client->ssl_socket->bytesAvailable()));
+        qDebug() << "Client data ADS: " << client->data;
+        if (client->data_size == client->data.size()){
+            receive_complete_data(client);
+        }
+        return;
+    }
+    client->data.append(client->ssl_socket->read(client->ssl_socket->bytesAvailable()));
+    qDebug() << "Client data N: " << client->data;
+    if (client->data.last(5) == "N-E-X"){
+        receive_message(client);
+        client->data.clear();
+    }
 }
 
-void SslServer::send_notes_info(){
 
+void SslServer::receive_message(Client* client){
+    qDebug() << client->data;
+    log.write(client->data + "\n");
+    log.flush();
+    QString message_type = client->data.split('|').at(0);
+    if (message_type == "login"){
+        login(client);
+    }
+    else if (message_type == "received_data"){
+        client->ssl_socket->write("received_data|N-E-X");
+    }
+    else if (message_type == "server_receive_note"){
+        sync_note_with_server(client);
+    }
+    else if (message_type == "server_send_note"){
+        if (client->data.split('|').at(1) == "receiving"){
+            send_note_to_client(client, true);
+        } else
+            send_note_to_client(client, false);
+    }
+    else if (message_type == "server_delete_note"){
+        delete_note(client);
+        client->ssl_socket->write("received_data|N-E-X");
+
+    }
+    else if (message_type == "server_receive_notelist"){
+        sync_note_list_with_server(client);
+    }
+    else if (message_type == "server_send_notelist"){
+        if (client->data.split('|').at(1) == "receiving"){
+            send_note_list_to_client(client, true);
+        } else
+            send_note_list_to_client(client, false);
+    }
+    else if (message_type == "server_encrypt_note"){
+        encrypt_note(client);
+    }
+    else if (message_type == "server_add_pwm"){
+        sql_server->add_pwm_item_to_db(client->data, client->username);
+    }
+    else if (message_type == "server_update_pwm"){
+        sql_server->update_pwm_item(client->data, client->username);
+    }
+    else if (message_type == "server_remove_pwm"){
+        sql_server->remove_pwm_item(client->data.split('|').at(1), client->username);
+    }
+    else if (message_type == "server_send_pwm"){
+        if (client->data.split('|').at(1) == "receiving"){
+            send_data(client->pwm_list, client);
+        }
+        else {
+            client->pwm_list = sql_server->return_pwm_list(client->username);
+            QByteArray message = "server_send_pwm|" + QString::number(client->pwm_list->size()).toUtf8() + "|N-E-X";
+            client->ssl_socket->write(message);
+        }
+    }
+    else if (message_type == "server_send_ftp"){
+        if (client->data.split('|').at(1) == "receiving"){
+            qDebug() << "Step 50;";
+            send_data(client->file_list, client);
+            qDebug() << "Step 60;";
+        }
+        else {
+            qDebug() << "Step 10;";
+            qDebug() << "Returning FTP list";
+            client->file_list = sql_server->return_ftp_list(client->username);
+            qDebug() << "Step 20;";
+            QByteArray message = "server_send_ftp|" + QString::number(client->file_list->size()).toUtf8() + "|N-E-X";
+            qDebug() << "Step 30;";
+            client->ssl_socket->write(message);
+            qDebug() << "Step 40;";
+
+        }
+    }
+    else if (message_type == "ftp_connection"){
+        establish_ftp_connection(client);
+
+    }
+    else if (message_type == "file_deletion"){
+        QString file_to_delete = client->data.split('|').at(1);
+        sql_server->remove_file_from_db(file_to_delete, client->username);
+        client->ssl_socket->write("received_data|N-E-X");
+    }
+    else if (message_type == "data_received"){
+        client->ssl_socket->write("server_ready|N-E-X");
+    }
 }
 
-void SslServer::send_file(){
-    QByteArray header;
-    QString path = QDir::currentPath() + "/test.mp4";
-    QFile file_to_send(path);
-    file_to_send.open(QIODevice::ReadOnly);
-    QFileInfo fi(path); //
-    QByteArray data_type = "file_transfer";
-    QByteArray file_name = fi.fileName().toUtf8();
-    QByteArray data_size;
-    data_size = data_size.setNum(file_to_send.size() + 500, 10);
-//    data_size = 500 + file_to_send.size();
-    header = data_type + "|" + file_name + "|" + data_size + "|";
-    while (header.size() < 500){
-        header.append(0x1);
+void SslServer::receive_complete_data(Client* client){
+    qDebug() << "Receiving complete data...";
+    qDebug() << client->data_type;
+    QFile file;
+    if (client->data_type == "note"){
+        file.setFileName("data/" + client->username.toLower() + "/" + client->note_name);
+        file.open(QIODevice::WriteOnly);
+        file.write(client->data);
+        file.close();
     }
-//    header.append(file_to_send.readAll());
-//    client_socket->write(header);
-    qint64 data_written = 0;
-    qint64 total_data = data_size.toInt();
-    qint32 bytes_to_write = 2048;
-    qint32 count = 0;
-    header.append(file_to_send.readAll());
-    while (data_written != total_data){
-        if (data_written + 2048 > total_data){
-            qDebug() << "Done";
-            bytes_to_write = total_data - data_written;
-            client_socket->write(header.mid(data_written, bytes_to_write));
-            data_written += bytes_to_write;
-            qDebug() << "Data Written: " << data_written;
-            return;
-        } else if (data_written >= total_data){
-            qDebug() << "Equals";
+    else if (client->data_type == "notelist"){
+        qDebug() << "Notelist";
+        file.setFileName("data/" + client->username.toLower() + "/" + "t_n_l_" + client->username);
+        file.open(QIODevice::WriteOnly);
+        file.write(client->data);
+        file.close();
+        sql_server->update_note_list(client->username);
+    }
+    client->data.clear();
+    client->ssl_socket->write("received_data|N-E-X");
+    client->active_data_transmission = false;
+}
+
+
+void SslServer::disconnected(){
+    QTcpSocket *client_socket = qobject_cast<QTcpSocket*>(sender());
+    Client *client = return_client(client_socket);
+    int count = 0;
+    for (auto x : clients){
+        if (client == x){
+            clients.takeAt(count);
+            delete client;
+            qDebug() << "Client disconnected and deleted!";
             return;
         }
-        client_socket->write(header.mid(data_written, 2048));
-        data_written += 2048;
+        count += 1;
+    }
+    qDebug() << "Couldn't find client. Exiting, bug 192";
+    exit(192);
+}
+// ---------------------------- HANDLES INCOMING DATA AND DISCONNECTION --------------------------------------
+
+
+// ---------------------------- HANDLES NOTE RELATED STUFF ---------------------------------------------------
+void SslServer::sync_note_with_server(Client* client){
+    client->data_size = client->data.split('|').at(1).toInt();
+    client->note_name = client->data.split('|').at(2);
+    client->data_type = "note";
+    client->ssl_socket->write("server_receive_note|receiving|N-E-X");
+    client->active_data_transmission = true;
+}
+
+
+void SslServer::delete_note(Client* client){
+    QFile note("data/" + client->username.toLower() + "/" + client->data.split('|').at(1));
+    note.remove();
+}
+
+
+void SslServer::sync_note_list_with_server(Client* client){
+    client->data_size = client->data.split('|').at(1).toInt();
+    client->note_name = client->data.split('|').at(2);
+    client->data_type = "notelist";
+    if (client->data_size == 0){
+        client->ssl_socket->write("|N-E-X");
+        sql_server->clear_note_list(client->username);
+        return;
+    }
+    client->ssl_socket->write("server_receive_notelist|receiving|N-E-X");
+    client->active_data_transmission = true;
+}
+
+
+void SslServer::send_note_to_client(Client* client, bool data){
+    if (data){
+        if (client->note->size() == 0){
+            return;
+        }
+        send_data(client->note, client);
+    }
+    else {
+        QString note_name = client->data.split('|').at(1);
+        qDebug() << "Note name: " << note_name;
+        client->note = sql_server->return_note(client->username, note_name);
+        QByteArray note_size = QString::number(client->note->size()).toUtf8();
+        qDebug() << "note size: " << client->note->size();
+        client->ssl_socket->write("server_send_note|" + note_size + "|N-E-X");
     }
 }
 
-void SslServer::receive_file(){
+
+void SslServer::send_note_list_to_client(Client* client, bool data){
+    qDebug() << "Data: " << data;
+    if (data){
+        send_data(client->note_list, client);
+        qDebug() << "Sending note list...";
+    } else {
+        client->note_list = sql_server->return_note_list(client->username);
+        client->ssl_socket->write("server_send_notelist|" + QString::number(client->note_list->size()).toUtf8() + "|N-E-X");
+        qDebug() << "Made it here;";
+    }
 
 }
 
-void SslServer::ssl_errors(const QList<QSslError> &errors){
-    foreach (const QSslError &error, errors)
-        qDebug() << error.errorString();
+//QString message = "server_encrypt_note|" + note + "|" + password + "|N-E-X";
+void SslServer::encrypt_note(Client* client){
+    QString path = "data/" + client->username.toLower() + "/" + client->data.split('|').at(1);
+    QString password = client->data.split('|').at(2);
+    client->encrypt_note(path, password);
 }
 
-SslServer::~SslServer(){
-    qDebug() << "End of server!";
-    exit(0);
+// ---------------------------- HANDLES NOTE RELATED STUFF ---------------------------------------------------
+
+
+// ---------------------------- HANDLES CLIENT RELATED STUFF AND REQUESTS ------------------------------------
+Client* SslServer::return_client(QTcpSocket *client_socket){ // Returns client from clients vector if exists.
+    for (auto x : clients){
+        if (client_socket->socketDescriptor() == x->ssl_socket->socketDescriptor()){
+            return x;
+        }
+    }
+    return nullptr;
 }
+
+
+void SslServer::send_data(QByteArray* data, Client* client, QFile *file){
+    quint32 bytes_written = 0;
+    quint32 bytes_to_write = data->size();
+    while(bytes_written != bytes_to_write){
+        if (bytes_to_write - bytes_written < max_packet_size){
+            client->ssl_socket->write(data->mid(bytes_written, bytes_to_write - bytes_written));
+            qDebug() << "send_data SENDING 1: " << data->mid(bytes_written, bytes_to_write - bytes_written);
+            bytes_written += bytes_to_write - bytes_written;
+        }
+        else {
+            client->ssl_socket->write(data->mid(bytes_written, max_packet_size));
+            qDebug() << "send_data SENDING 2: " << data->mid(bytes_written, max_packet_size);
+            bytes_written += max_packet_size;
+        }
+    }
+    data->clear();
+}
+
+
+void SslServer::login(Client *client){
+    qDebug() << "Login!";
+    QString username = client->data.split('|').at(1);
+    QString password = client->data.split('|').at(2);
+    if (sql_server->verify_login(username, password)){
+        QByteArray message = "login|success|";
+        client->unique_user_hash = sql_server->return_user_hash(username);
+        message += client->unique_user_hash.toUtf8();
+        message += "|N-E-X";
+        client->username = username.toLower();
+        client->create_folders();
+        client->logged_in = true;
+        client->ssl_socket->write(message);
+    }
+    else {
+        client->ssl_socket->write("login|failure|N-E-X");
+    }
+}
+
+
+void SslServer::establish_ftp_connection(Client* client){
+    QString message = "ftp_connection|";
+    if (!client->logged_in)
+        message.append("00000|N-E-X");
+    else {
+        Client *new_ft_stream = new Client();
+        ftp_server->active_ft_streams.append(new_ft_stream);
+        quint32 session_id = 12345;
+        new_ft_stream->session_id = session_id;
+        new_ft_stream->ssl_socket = nullptr;
+        new_ft_stream->username = client->username.toLower();
+        message.append("12345|N-E-X"); // Create rng session_id later on instead of magic number
+    }
+    qDebug() << "Is client logged in? " << client->logged_in;
+    client->ssl_socket->write(message.toUtf8());
+}
+
+// ---------------------------- HANDLES CLIENT RELATED STUFF AND REQUESTS ------------------------------------

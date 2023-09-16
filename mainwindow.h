@@ -16,6 +16,8 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
+    SslServer *server;
+
 private:
     Ui::MainWindow *ui;
 };
